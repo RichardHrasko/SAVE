@@ -1,0 +1,121 @@
+addpath('quaternion_library');
+clear; close all; 
+
+%% Paths
+rightPath = "C:\Users\risko\Desktop\CSV_Right\velka";
+leftPath  = "C:\Users\risko\Desktop\CSV_Left\velka";
+gpsPath = "C:\Users\risko\Desktop\CSV_Left\velka";
+exportFolder = "C:\Users\risko\Desktop\CSV_export";
+
+%% Flags
+RawplotsOn = 0;
+
+%% Time windows
+magCalStart  = 0;
+magCalStop   = 180;
+gyroCalStart = 140;
+gyroCalStop  = 180;
+measStart    = 180;
+% measStop     = 1200; %tretia
+measStop = 2500;
+%% Gains
+startupTime = 3;
+
+Kp_fast = 5;
+Ki_fast = 0;
+MagWeight_fast = 0.07;
+AccWeight_fast = 1;
+
+Kp_run = 0.5;
+Ki_run = 0;
+MagWeight_run = 0.05;
+AccWeight_run = 1;
+
+%% Thresholds
+accThreshold = 1;
+magTolerance = 0;
+biasSeconds = 50;
+
+%% Filter
+eulerLPHz = 1;
+Nbutter = 2;
+
+%% Config struct
+cfg.RawplotsOn = RawplotsOn;
+cfg.windows.magCalStart  = magCalStart;
+cfg.windows.magCalStop   = magCalStop;
+cfg.windows.gyroCalStart = gyroCalStart;
+cfg.windows.gyroCalStop  = gyroCalStop;
+cfg.windows.measStart    = measStart;
+cfg.windows.measStop     = measStop;
+
+cfg.startupTime = startupTime;
+
+cfg.fast.Kp = Kp_fast;
+cfg.fast.Ki = Ki_fast;
+cfg.fast.MagWeight = MagWeight_fast;
+cfg.fast.AccWeight = AccWeight_fast;
+
+cfg.run.Kp = Kp_run;
+cfg.run.Ki = Ki_run;
+cfg.run.MagWeight = MagWeight_run;
+cfg.run.AccWeight = AccWeight_run;
+
+cfg.accThreshold = accThreshold;
+cfg.magTolerance = magTolerance;
+cfg.biasSeconds = biasSeconds;
+
+cfg.eulerLPHz = eulerLPHz;
+cfg.Nbutter = Nbutter;
+
+cfg.stillGyroThresh = 2.0;        % deg/s
+cfg.stillAccThresh = 0.15;        % m/s^2
+cfg.stillBiasWindowSec = 1.0;     % s
+
+%% Process
+right = [];
+left  = [];
+
+if isfolder(rightPath) || isfile(rightPath)
+    [right] = processDataAutoBias(rightPath, cfg);
+end
+
+if isfolder(leftPath) || isfile(leftPath)
+    left = processDataAutoBias(leftPath, cfg);
+end
+
+gps = processGPS(gpsPath, right.t);
+
+rightStats = [];
+leftStats  = [];
+
+% Plot
+% if ~isempty(right) && ~isempty(left)
+%     plotBoth(right.euler, left.euler, left.t, right.t)
+% end
+
+cfg = struct;
+
+Turndetection = TurnDetectionIntervals(left, right,gps, cfg, false);
+
+StatsOverall = StatsOverall(Turndetection, right, left, gps);
+
+[tLeft, tRight] = peakZeroTimes(right.t, Turndetection.averageEuler, Turndetection.peaks, exportFolder);
+
+%% Export
+if ~isempty(right)
+    exportSkiCSV(right.t, right.euler, right.acc, right.gyro, right.mag, ...
+        exportFolder, "right_ski");
+end
+
+if ~isempty(left)
+    exportSkiCSV(left.t, left.euler, left.acc, left.gyro, left.mag, exportFolder, "left_ski");
+end
+
+exportGPSCSV(gps, exportFolder);
+out = detailed(Turndetection, right, left, gps, exportFolder);
+exportTurnDetection(Turndetection, exportFolder, 'turnDetection');
+
+clc
+
+runPython 
