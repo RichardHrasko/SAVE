@@ -1,0 +1,181 @@
+function out = detectTurnsBothSides(t, x, minAmp, minDistSec, eventThresh, doPlot)
+% Detect positive and negative peaks together
+%
+% INPUTS:
+%   t           - Nx1 time vector [s]
+%   x           - Nx1 signal (e.g. roll in deg)
+%   minAmp      - minimum absolute amplitude of peak
+%   minDistSec  - minimum allowed time between two detected extrema [s]
+%   eventThresh - threshold for event start/end around peak (positive value)
+%   doPlot      - true/false
+%
+% OUTPUT:
+%   out.count
+%   out.idx
+%   out.tPeaks
+%   out.values
+%   out.side         % +1 for positive peak, -1 for negative peak
+%   out.sideLabel    % "positive"/"negative"
+%   out.events       % struct array
+%
+% Each out.events(k) contains:
+%   .idxPeak
+%   .tPeak
+%   .value
+%   .absValue
+%   .side
+%   .sideLabel
+%   .idxStart
+%   .idxEnd
+%   .tStart
+%   .tEnd
+%   .duration
+
+    if nargin < 6
+        doPlot = false;
+    end
+
+    t = t(:);
+    x = x(:);
+
+    if length(t) ~= length(x)
+        error('t and x must have the same length.');
+    end
+
+    if length(t) < 3
+        error('Signal is too short.');
+    end
+
+    dt = median(diff(t));
+    Fs = 1 / dt;
+    minDistSamples = max(1, round(minDistSec * Fs));
+
+    % --- positive peaks
+    [pksPos, locsPos] = findpeaks(x, ...
+        'MinPeakHeight', minAmp);
+
+    % --- negative peaks = positive peaks in -x
+    [pksNegTmp, locsNeg] = findpeaks(-x, ...
+        'MinPeakHeight', minAmp);
+    pksNeg = -pksNegTmp;
+
+    % --- merge candidates
+    locsAll   = [locsPos; locsNeg];
+    valsAll   = [pksPos;  pksNeg];
+    sideAll   = [ ones(size(locsPos)); -ones(size(locsNeg)) ];
+
+    if isempty(locsAll)
+        out.count     = 0;
+        out.idx       = [];
+        out.tPeaks    = [];
+        out.values    = [];
+        out.side      = [];
+        out.sideLabel = strings(0,1);
+        out.events    = struct([]);
+        return;
+    end
+
+    % --- sort by time
+    [locsAll, ord] = sort(locsAll);
+    valsAll = valsAll(ord);
+    sideAll = sideAll(ord);
+
+    % --- suppress peaks that are too close: keep larger absolute one
+    keepIdx = [];
+    current = 1;
+
+    for k = 2:length(locsAll)
+        if (locsAll(k) - locsAll(current)) < minDistSamples
+            if abs(valsAll(k)) > abs(valsAll(current))
+                current = k;
+            end
+        else
+            keepIdx(end+1,1) = current; %#ok<AGROW>
+            current = k;
+        end
+    end
+    keepIdx(end+1,1) = current;
+
+    locsKeep = locsAll(keepIdx);
+    valsKeep = valsAll(keepIdx);
+    sideKeep = sideAll(keepIdx);
+
+    % --- event windows
+    events = struct( ...
+        'idxPeak', {}, 'tPeak', {}, 'value', {}, 'absValue', {}, ...
+        'side', {}, 'sideLabel', {}, ...
+        'idxStart', {}, 'idxEnd', {}, ...
+        'tStart', {}, 'tEnd', {}, 'duration', {});
+
+    for k = 1:numel(locsKeep)
+        iPeak = locsKeep(k);
+        peakVal = valsKeep(k);
+        sgn = sign(peakVal);
+
+        % event defined by |x| > eventThresh around peak
+        iStart = iPeak;
+        while iStart > 1 && abs(x(iStart)) > eventThresh
+            iStart = iStart - 1;
+        end
+
+        iEnd = iPeak;
+        while iEnd < length(x) && abs(x(iEnd)) > eventThresh
+            iEnd = iEnd + 1;
+        end
+
+        events(k).idxPeak   = iPeak;
+        events(k).tPeak     = t(iPeak);
+        events(k).value     = peakVal;
+        events(k).absValue  = abs(peakVal);
+        events(k).side      = sgn;
+
+        if sgn > 0
+            events(k).sideLabel = "positive";
+        else
+            events(k).sideLabel = "negative";
+        end
+
+        events(k).idxStart  = iStart;
+        events(k).idxEnd    = iEnd;
+        events(k).tStart    = t(iStart);
+        events(k).tEnd      = t(iEnd);
+        events(k).duration  = t(iEnd) - t(iStart);
+    end
+
+    out.count  = numel(locsKeep);
+    out.idx    = locsKeep;
+    out.tPeaks = t(locsKeep);
+    out.values = valsKeep;
+    out.side   = sideKeep;
+
+    sideLabel = strings(numel(sideKeep),1);
+    sideLabel(sideKeep > 0) = "positive";
+    sideLabel(sideKeep < 0) = "negative";
+    out.sideLabel = sideLabel;
+
+    out.events = events;
+
+    if doPlot
+        figure;
+        plot(t, x, 'b', 'LineWidth', 1.2); hold on;
+        yline( minAmp, '--r', 'Min amp +', 'LineWidth', 1.0);
+        yline(-minAmp, '--r', 'Min amp -', 'LineWidth', 1.0);
+        yline( eventThresh, ':k', 'Event thr', 'LineWidth', 1.0);
+        yline(-eventThresh, ':k', 'Event thr', 'LineWidth', 1.0);
+
+        posMask = valsKeep > 0;
+        negMask = valsKeep < 0;
+
+        plot(t(locsKeep(posMask)), valsKeep(posMask), 'ro', 'MarkerFaceColor', 'r');
+        plot(t(locsKeep(negMask)), valsKeep(negMask), 'go', 'MarkerFaceColor', 'g');
+
+        for k = 1:numel(events)
+            xline(events(k).tStart, '--', 'Color', [0.7 0.7 0.7]);
+            xline(events(k).tEnd,   '--', 'Color', [0.7 0.7 0.7]);
+            text(events(k).tPeak, events(k).value, sprintf(' %.2f s', events(k).tPeak), ...
+                'VerticalAlignment', 'bottom');
+        end
+
+  
+    end
+end
